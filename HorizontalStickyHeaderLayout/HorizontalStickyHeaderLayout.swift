@@ -151,13 +151,32 @@ public final class HorizontalStickyHeaderLayout: UICollectionViewLayout {
                     x += min(xByLeftBoundary, xByRightBoundary)
                 }
             }
-            let frame = CGRect(x: x,
+            func shouldPopHeader() -> Bool {
+                #if os(tvOS)
+                    if let focusedItemFrame = cv.visibleCells.first(where: { $0.isFocused }).map({ $0.frame }) {
+                        let shouldPop = !(focusedItemFrame.maxX < x ||
+                            x + headerSize.width
+                            + headerInsets.right // in case item next to is focused and enlarged
+                            < focusedItemFrame.minX)
+                        return shouldPop
+                    } else {
+                        return false
+                    }
+                #elseif os(iOS)
+                    return false
+                #endif
+            }
+            //            let yDeltaForFocus = getYDeltaForFocus()
+            let frame = CGRect(x: x + headerInsets.left,
                                y: headerInsets.top,
                                width: headerSize.width,
                                height: headerSize.height)
             let attr = UICollectionViewLayoutAttributes(forSupplementaryViewOfKind: UICollectionElementKindSectionHeader,
                                                         with: IndexPath(item: 0, section: section))
             attr.frame = frame
+            if shouldPopHeader() {
+                attr.transform = CGAffineTransform(translationX: 0, y: -20)
+            }
             attributes.append(attr)
             x += headerInsets.right
         }
