@@ -103,6 +103,9 @@ extension ViewController: UICollectionViewDataSource {
         v.backgroundColor = indexPath.section % 2 == 0 ? .orange : .green
         return v
     }
+    func collectionView(_ collectionView: UICollectionView, didUpdateFocusIn context: UICollectionViewFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
+        layout.invalidateLayout()
+    }
 }
 
 // MARK: HorizontalStickyHeaderLayoutDelegate
@@ -146,18 +149,5 @@ extension ViewController: HorizontalStickyHeaderLayoutDelegate {
     }
     func collectionView(_ collectionView: UICollectionView, hshlSectionInsetsAtSection section: Int) -> UIEdgeInsets {
         return UIEdgeInsets(top: 0, left: Const.spacingForItems, bottom: 0, right: section == 4 ? 0 : Const.spacingForItems)
-    }
-}
-
-// MARK: Focus
-extension ViewController {
-    func collectionView(_ collectionView: UICollectionView, didUpdateFocusIn context: UICollectionViewFocusUpdateContext, with coordinator: UIFocusAnimationCoordinator) {
-        guard context.nextFocusedIndexPath != nil || context.previouslyFocusedIndexPath != nil else {
-            return
-        }
-        self.collectionView.collectionViewLayout.invalidateLayout()
-        coordinator.addCoordinatedAnimations({
-            self.collectionView.layoutIfNeeded()
-        }, completion: nil)
     }
 }

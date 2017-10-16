@@ -30,6 +30,9 @@ public final class HorizontalStickyHeaderLayout: UICollectionViewLayout {
     private var cacheForItems = [Layout]()
     public weak var delegate: HorizontalStickyHeaderLayoutDelegate?
     public var contentInset = UIEdgeInsets.zero
+    lazy var animator: UIDynamicAnimator = {
+        return UIDynamicAnimator(collectionViewLayout: self)
+    }()
 
     // MARK: UICollectionViewLayout overrides
     public override func prepare() {
@@ -47,9 +50,6 @@ public final class HorizontalStickyHeaderLayout: UICollectionViewLayout {
         guard let cv = collectionView else {
             fatalError("collectionView is not set.")
         }
-
-        // reset
-        cacheForItems.removeAll(keepingCapacity: true)
 
         // prepare layout for cells
         var x: CGFloat = contentInset.left
@@ -75,20 +75,73 @@ public final class HorizontalStickyHeaderLayout: UICollectionViewLayout {
             }
             x += sectionInsets.right
         }
+
+        // setup UIDynamicAnimator
+        let visibleRect = cv.bounds.insetBy(dx: 0, dy: 0)
+        let visiblePaths = indexPaths(rect: visibleRect)
+        do { // Items
+            var currentlyVisible: [IndexPath] = []
+            for behavior in animator.behaviors {
+                if let behavior = behavior as? UIAttachmentBehavior,
+                    let item = behavior.items
+                        .flatMap({ $0 as? UICollectionViewLayoutAttributes })
+                        .first(where: { $0.representedElementCategory == .cell }) {
+                    if !visiblePaths.contains(item.indexPath) {
+                        animator.removeBehavior(behavior)
+                    } else {
+                        currentlyVisible.append(item.indexPath)
+                    }
+                }
+            }
+
+            let newlyVisible = visiblePaths.filter { path in
+                return !currentlyVisible.contains(path)
+            }
+
+            let staticAttributes = cacheForItems
+                .filter { newlyVisible.contains($0.indexPath) }
+                .map { $0.attributes }
+
+            for attributes in staticAttributes {
+                let spring = UIAttachmentBehavior(item: attributes, attachedToAnchor: attributes.center)
+                animator.addBehavior(spring)
+            }
+        }
+        do { // headers
+            let visibleSections = Set(visiblePaths.map { $0.section })
+            var currentlyVisible: [Int] = []
+            for behavior in animator.behaviors {
+                if let behavior = behavior as? UIAttachmentBehavior,
+                    let item = behavior.items
+                        .flatMap({ $0 as? UICollectionViewLayoutAttributes })
+                        .first(where: { $0.representedElementCategory == .supplementaryView }) {
+                    if !visibleSections.contains(item.indexPath.section) {
+                        animator.removeBehavior(behavior)
+                    } else {
+                        currentlyVisible.append(item.indexPath.section)
+                    }
+                }
+            }
+            let newlyVisible = visibleSections.filter { section in
+                return !currentlyVisible.contains(section)
+            }
+
+            let staticAttributes = getAttributesForHeaders()
+                .filter { newlyVisible.contains($0.indexPath.section) }
+            for attributes in staticAttributes {
+                let spacing = UIAttachmentBehavior(item: attributes, attachedToAnchor: attributes.center)
+                animator.addBehavior(spacing)
+            }
+        }
     }
     public override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
-        let forItems = cacheForItems.filter { rect.intersects($0.frame) }.map { $0.attributes }
-        let forHeaders = getAttributesForHeaders()
-        return forItems + forHeaders
+        return animator.items(in: rect).map { $0 as! UICollectionViewLayoutAttributes }
     }
     public override func layoutAttributesForItem(at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
-        return cacheForItems.first { $0.indexPath == indexPath }?.attributes
+        return animator.layoutAttributesForCell(at: indexPath)
     }
     public override func layoutAttributesForSupplementaryView(ofKind elementKind: String, at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
-        guard elementKind == UICollectionElementKindSectionHeader else {
-            return nil
-        }
-        return getAttributesForHeaders().first { $0.indexPath == indexPath }
+        return animator.layoutAttributesForSupplementaryView(ofKind: elementKind, at: indexPath)
     }
     public override var collectionViewContentSize: CGSize {
         guard let cv = collectionView, let delegate = delegate else {
@@ -106,23 +159,21 @@ public final class HorizontalStickyHeaderLayout: UICollectionViewLayout {
     // Note: Needed for sticky headers while scroling
 
     override open func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
-        return true
-    }
-
-    open override func invalidationContext(forBoundsChange newBounds: CGRect) -> UICollectionViewLayoutInvalidationContext {
-        guard let cv = collectionView else {
-            fatalError()
+        let attributesForHeaders = getAttributesForHeaders()
+        for behavior in animator.behaviors {
+            if let behavior = behavior as? UIAttachmentBehavior,
+                let attributes = behavior.items
+                    .flatMap({ $0 as? UICollectionViewLayoutAttributes })
+                    .first(where: { $0.representedElementCategory == .supplementaryView }) {
+                if let calculated = attributesForHeaders.first(where: { $0.indexPath == attributes.indexPath }) {
+                    if attributes.center != calculated.center {
+                        attributes.center = calculated.center
+                        animator.updateItem(usingCurrentState: attributes)
+                    }
+                }
+            }
         }
-
-        let oldBounds = cv.bounds
-        let sizeChanged = oldBounds.width != newBounds.width || oldBounds.height != newBounds.height
-
-        let context = super.invalidationContext(forBoundsChange: newBounds)
-
-        if !sizeChanged {
-            context.invalidateSupplementaryElements(ofKind: UICollectionElementKindSectionHeader, at: getAttributesForHeaders().map { $0.indexPath })
-        }
-        return context
+        return false
     }
 
     // MARK: Utilities
@@ -141,8 +192,8 @@ public final class HorizontalStickyHeaderLayout: UICollectionViewLayout {
             let itemsInsets = delegate.collectionView(cv, hshlSectionInsetsAtSection: section)
             do {
                 let numberOfItems = cv.numberOfItems(inSection: section)
-                if let firstItemAttributes = cacheForItems.first(where: { $0.indexPath == IndexPath(item: 0, section: section) }),
-                    let lastItemAttributes = cacheForItems.first(where: { $0.indexPath == IndexPath(row: numberOfItems - 1, section: section) }) {
+                if let firstItemAttributes = animator.layoutAttributesForCell(at: IndexPath(item: 0, section: section) ),
+                    let lastItemAttributes = animator.layoutAttributesForCell(at: IndexPath(row: numberOfItems - 1, section: section)) {
 
                     let edgeX = cv.contentOffset.x + contentInset.left + headerInsets.left
                     let xByLeftBoundary = max(edgeX, firstItemAttributes.frame.minX - itemsInsets.left + headerInsets.left)
@@ -151,8 +202,10 @@ public final class HorizontalStickyHeaderLayout: UICollectionViewLayout {
                     x += min(xByLeftBoundary, xByRightBoundary)
                 }
             }
+
             func shouldPopHeader() -> Bool {
                 #if os(tvOS)
+                    let cv = collectionView!
                     if let focusedItemFrame = cv.visibleCells.first(where: { $0.isFocused }).map({ $0.frame }) {
                         let shouldPop = !(focusedItemFrame.maxX < x ||
                             x + headerSize.width
@@ -166,20 +219,49 @@ public final class HorizontalStickyHeaderLayout: UICollectionViewLayout {
                     return false
                 #endif
             }
-            //            let yDeltaForFocus = getYDeltaForFocus()
+
+            let deltaY: CGFloat = shouldPopHeader() ? -20 : 0
             let frame = CGRect(x: x + headerInsets.left,
-                               y: headerInsets.top,
+                               y: headerInsets.top + deltaY,
                                width: headerSize.width,
                                height: headerSize.height)
             let attr = UICollectionViewLayoutAttributes(forSupplementaryViewOfKind: UICollectionElementKindSectionHeader,
                                                         with: IndexPath(item: 0, section: section))
             attr.frame = frame
-            if shouldPopHeader() {
-                attr.transform = CGAffineTransform(translationX: 0, y: -20)
-            }
             attributes.append(attr)
             x += headerInsets.right
         }
         return attributes
+    }
+    func firstIndexPath(_ rect: CGRect) -> IndexPath {
+//        for layout in cacheForItems {
+//            if layout.frame.origin.x >= rect.minX {
+//                return layout.indexPath
+//            }
+//        }
+//
+//        return IndexPath(item: 0, section: 0)
+        return cacheForItems.first!.indexPath
+    }
+
+    func lastIndexPath(_ rect: CGRect) -> IndexPath {
+//        for layout in cacheForItems {
+//            if layout.frame.origin.x >= rect.maxX {
+//                return layout.indexPath
+//            }
+//        }
+//        return IndexPath(item: 0, section: 0)
+        return cacheForItems.last!.indexPath
+    }
+
+    func indexPaths(rect: CGRect) -> [IndexPath] {
+        let min = firstIndexPath(rect)
+        let max = lastIndexPath(rect)
+        var indexPaths = [IndexPath]()
+        for section in (min.section...max.section) {
+            let numberOfItems = collectionView!.numberOfItems(inSection: section)
+            indexPaths.append(contentsOf: (min.item..<numberOfItems).map { IndexPath(item: $0, section: section) })
+        }
+        return indexPaths
     }
 }
